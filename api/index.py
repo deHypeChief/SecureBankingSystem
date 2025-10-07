@@ -499,27 +499,49 @@ def get_security():
         return jsonify({'success': False, 'message': str(e)})
 
 # Vercel serverless function handler
-def handler(request):
-    """Minimal Vercel Python function handler returning static HTML."""
-    html = """
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta charset="utf-8" />
-      <title>Secure Banking System</title>
-      <meta name="robots" content="noindex">
-      <style>body{font-family:Arial,sans-serif;text-align:center;padding:40px;background:#f5f5f5} .card{max-width:700px;margin:0 auto;background:#fff;padding:30px;border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,0.08)}</style>
-    </head>
-    <body>
-      <div class="card">
-        <h1>🏦 Secure Banking System</h1>
-        <p>Serverless function is responding.</p>
-        <p>Visit /api endpoints to interact with the demo API.</p>
-      </div>
-    </body>
-    </html>
-    """
-    return (200, [('Content-Type', 'text/html')], html)
+from http.server import BaseHTTPRequestHandler
+
+class handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.handle_request('GET')
+
+    def do_POST(self):
+        self.handle_request('POST')
+
+    def handle_request(self, method):
+        # Create WSGI environ
+        environ = {
+            'REQUEST_METHOD': method,
+            'PATH_INFO': self.path,
+            'QUERY_STRING': self.path.split('?', 1)[1] if '?' in self.path else '',
+            'CONTENT_TYPE': self.headers.get('content-type', ''),
+            'CONTENT_LENGTH': self.headers.get('content-length', '0'),
+            'SERVER_NAME': 'localhost',
+            'SERVER_PORT': '80',
+            'wsgi.version': (1, 0),
+            'wsgi.url_scheme': 'http',
+            'wsgi.input': self.rfile,
+            'wsgi.errors': sys.stderr,
+            'wsgi.multithread': False,
+            'wsgi.multiprocess': False,
+            'wsgi.run_once': False,
+        }
+        # Add headers
+        for header, value in self.headers.items():
+            environ['HTTP_' + header.upper().replace('-', '_')] = value
+
+        # Start response function
+        def start_response(status, headers):
+            self.send_response(int(status.split()[0]))
+            for h, v in headers:
+                self.send_header(h, v)
+            self.end_headers()
+
+        # Call the app
+        result = app(environ, start_response)
+        # Write the body
+        for data in result:
+            self.wfile.write(data)
 
 # For local development
 if __name__ == '__main__':
