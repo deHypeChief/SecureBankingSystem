@@ -12,4 +12,8 @@ def handler(request):
       </body>
     </html>
     """
-    return (200, [("Content-Type", "text/html")], html)
+    return {
+        "statusCode": 200,
+        "headers": {"Content-Type": "text/html"},
+        "body": html
+    }
