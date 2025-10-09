@@ -11,6 +11,7 @@ from src.models.user import User
 from src.models.transaction import Transaction, TransactionType
 from src.models.session import Session
 from config.security_config import SecurityConfig
+from database import BankDatabase
 
 class SecureOnlineBanking:
     """Complete Secure Online Banking System"""
@@ -21,20 +22,20 @@ class SecureOnlineBanking:
         self.secure_protocol = SecureProtocol()
         self.mfa_auth = MFAAuthenticator()
         self.performance_metrics = []
+        self.db = BankDatabase()
         
         # Generate server keys
         self.server_private_key, self.server_public_key = self.crypto_manager.generate_rsa_keypair()
         
-        # Storage
-        self.users: Dict[str, User] = {}
-        self.sessions: Dict[str, Session] = {}
+        # Storage (in-memory for now, but DB for persistence)
         self.login_attempts: Dict[str, int] = {}
         self.audit_trail: List[Dict] = []
     
     @PerformanceMonitor.measure_time
     def register_user(self, username: str, password: str, email: str):
         """Register new user with secure password storage"""
-        if username in self.users:
+        user = self.db.get_user_by_username(username)
+        if user:
             raise ValueError("User already exists")
         
         if len(password) < self.config.MIN_PASSWORD_LENGTH:
@@ -44,19 +45,9 @@ class SecureOnlineBanking:
         salt = secrets.token_bytes(32)
         hashed_password, salt = self.crypto_manager.hash_password(password, salt)
         
-        # Create user object
-        user_data = User(
-            username=username,
-            password_hash=hashed_password,
-            salt=salt,
-            email=email,
-            registration_date=datetime.now(),
-            account_balance=0.0,
-            transaction_history=[],
-            mfa_enabled=True  # Enable MFA by default
-        )
+        # Insert into DB
+        self.db.insert_user(username, hashed_password, salt, email)
         
-        self.users[username] = user_data
         self.mfa_auth.enable_mfa_for_user(username)
         self.log_security_event(f"USER_REGISTRATION: {username}")
         
@@ -65,7 +56,8 @@ class SecureOnlineBanking:
     @PerformanceMonitor.measure_time
     def authenticate_user(self, username: str, password: str, otp_code: str = None):
         """Authenticate user with MFA"""
-        if username not in self.users:
+        user_row = self.db.get_user_by_username(username)
+        if not user_row:
             self.log_failed_attempt(username, "USER_NOT_FOUND")
             return None
         
@@ -75,20 +67,19 @@ class SecureOnlineBanking:
             return None
         
         # Verify password
-        user_data = self.users[username]
+        password_hash, salt = user_row[1], user_row[2]  # Assuming columns: username, password_hash, salt, email, balance, date
         
-        if not self.crypto_manager.verify_password(password, user_data.password_hash, user_data.salt):
+        if not self.crypto_manager.verify_password(password, password_hash, salt):
             self.log_failed_attempt(username, "INVALID_PASSWORD")
             return None
         
-        # Verify MFA if enabled
-        if user_data.mfa_enabled:
-            if not otp_code:
-                self.log_failed_attempt(username, "MFA_REQUIRED")
-                return None
-            if not self.mfa_auth.verify_totp(username, otp_code):
-                self.log_failed_attempt(username, "INVALID_OTP")
-                return None
+        # Verify MFA if enabled (assuming MFA is enabled for all for now)
+        if not otp_code:
+            self.log_failed_attempt(username, "MFA_REQUIRED")
+            return None
+        if not self.mfa_auth.verify_totp(username, otp_code):
+            self.log_failed_attempt(username, "INVALID_OTP")
+            return None
         
         # Generate session
         session_id = self.create_secure_session(username)
@@ -110,16 +101,11 @@ class SecureOnlineBanking:
             self.server_public_key
         )
         
-        session_data = Session(
-            session_id=session_id,
-            username=username,
-            created_at=datetime.now(),
-            last_activity=datetime.now(),
-            ip_address='127.0.0.1',  # In real implementation, get from request
-            user_agent='Demo Client'
-        )
+        expires_at = datetime.now() + timedelta(hours=1)  # 1 hour session
         
-        self.sessions[session_id] = session_data
+        # Insert session into DB
+        self.db.insert_session(session_id, username, expires_at)
+        
         return session_id
     
     @PerformanceMonitor.measure_time
@@ -203,18 +189,18 @@ class SecureOnlineBanking:
     @PerformanceMonitor.measure_time
     def validate_session(self, session_id: str):
         """Validate session integrity and timeout"""
-        if session_id not in self.sessions:
+        session_row = self.db.get_session(session_id)
+        if not session_row:
             return False
         
-        session = self.sessions[session_id]
+        expires_at = datetime.fromisoformat(session_row[3])  # expires_at column
         
-        if session.is_expired(self.config.SESSION_TIMEOUT):
-            del self.sessions[session_id]
-            self.log_security_event(f"SESSION_EXPIRED: {session.username}")
+        if datetime.now() > expires_at:
+            self.db.delete_session(session_id)
+            self.log_security_event(f"SESSION_EXPIRED: {session_row[1]}")  # username
             return False
         
-        # Update last activity
-        session.update_activity()
+        # Session is valid
         return True
     
     @PerformanceMonitor.measure_time
@@ -223,8 +209,14 @@ class SecureOnlineBanking:
         if not self.validate_session(session_id):
             raise SecurityError("Invalid session")
         
-        username = self.sessions[session_id].username
-        return self.users[username].account_balance
+        session_row = self.db.get_session(session_id)
+        if not session_row:
+            raise SecurityError("Session not found")
+        username = session_row[1]  # username column
+        user_row = self.db.get_user_by_username(username)
+        if not user_row:
+            raise SecurityError("User not found")
+        return user_row[4]  # account_balance column
     
     @PerformanceMonitor.measure_time
     def get_transaction_history(self, session_id: str):
@@ -232,23 +224,29 @@ class SecureOnlineBanking:
         if not self.validate_session(session_id):
             raise SecurityError("Invalid session")
         
-        username = self.sessions[session_id].username
-        user_data = self.users[username]
+        session_row = self.db.get_session(session_id)
+        if not session_row:
+            raise SecurityError("Session not found")
+        username = session_row[1]
+        user_row = self.db.get_user_by_username(username)
+        if not user_row:
+            raise SecurityError("User not found")
         
         return {
             'username': username,
-            'balance': user_data.account_balance,
-            'transaction_count': len(user_data.transaction_history),
-            'transactions': user_data.transaction_history[-10:]  # Last 10 transactions
+            'balance': user_row[4],
+            'transaction_count': 0,  # TODO: implement transactions table
+            'transactions': []  # Last 10 transactions
         }
     
     @PerformanceMonitor.measure_time
     def logout_user(self, session_id: str):
         """Logout user and clear session"""
-        if session_id in self.sessions:
-            username = self.sessions[session_id].username
+        session_row = self.db.get_session(session_id)
+        if session_row:
+            username = session_row[1]
             self.secure_protocol.close_session(session_id)
-            del self.sessions[session_id]
+            self.db.delete_session(session_id)
             self.log_security_event(f"USER_LOGOUT: {username}")
             return True
         return False

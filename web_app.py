@@ -8,10 +8,12 @@ sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
 from src.banking_core import SecureOnlineBanking
 from src.performance_reporter import PerformanceReporter
+from database import BankDatabase
 
 app = Flask(__name__)
 app.secret_key = 'your-secret-key-123'  # Needed for flask sessions
 bank = SecureOnlineBanking()
+db = BankDatabase()  # Initialize database connection
 
 # Main dashboard HTML
 DASHBOARD_HTML = '''
