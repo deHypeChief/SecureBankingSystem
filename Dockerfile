@@ -33,7 +33,7 @@ COPY . .
 # Make startup script executable
 RUN chmod +x start.sh
 
-# Create a non-root user for security
+# Create a non-root user for securikwty
 RUN useradd --create-home --shell /bin/bash app && \
     chown -R app:app /app
 USER app

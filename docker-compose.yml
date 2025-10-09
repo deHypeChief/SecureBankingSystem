@@ -5,6 +5,8 @@ services:
     build: .
     ports:
       - "5000:5000"
+    env_file:
+      - .env
     environment:
       - FLASK_ENV=development
       - SECRET_KEY=dev-secret-key-change-in-production
@@ -13,12 +15,29 @@ services:
       # Mount source code for development (comment out for production)
       - .:/app
     restart: unless-stopped
+    depends_on:
+      - postgres
     healthcheck:
       test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:5000/health', timeout=10)"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
+
+  postgres:
+    image: postgres:13
+    environment:
+      - POSTGRES_DB=bankingdb
+      - POSTGRES_USER=bankuser
+      - POSTGRES_PASSWORD=bankpass
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
 
   # Optional: Add a reverse proxy for production
   # nginx:
