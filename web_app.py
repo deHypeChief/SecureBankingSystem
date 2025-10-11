@@ -11,7 +11,7 @@ from src.performance_reporter import PerformanceReporter
 from database import BankDatabase
 
 app = Flask(__name__)
-app.secret_key = 'your-secret-key-123'  # Needed for flask sessions
+app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-123')  # Load from env
 bank = SecureOnlineBanking()
 db = BankDatabase()  # Initialize database connection
 
