@@ -375,11 +375,16 @@ LOGIN_HTML = '''
 
 @app.route('/')
 def home():
+    if request.method == 'HEAD':
+        return '', 200
     return render_template_string(LOGIN_HTML)
 
 @app.route('/register', methods=['POST'])
 def register():
-    data = request.json
+    data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'message': 'Invalid JSON data'}), 400
+    
     try:
         bank.register_user(data['username'], data['password'], data['email'])
         return jsonify({'success': True, 'message': 'User registered successfully!'})
@@ -388,19 +393,17 @@ def register():
 
 @app.route('/login', methods=['POST'])
 def login():
-    data = request.json
+    data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'message': 'Invalid JSON data'}), 400
+    
     try:
-        session_id = bank.authenticate_user(data['username'], data['password'], data['otp'])
+        session_id = bank.authenticate_user(data['username'], data['password'], data.get('otp'))
         
         if session_id:
             # Store session in flask session
             flask_session['user_session'] = session_id
             flask_session['username'] = data['username']
-            
-            # Get user data for the dashboard
-            user = bank.users[data['username']]
-            flask_session['email'] = user.email
-            flask_session['registration_date'] = user.registration_date.strftime('%Y-%m-%d %H:%M:%S')
             
             return jsonify({
                 'success': True, 
@@ -435,7 +438,7 @@ def dashboard():
 @app.route('/api/balance')
 def api_balance():
     session_id = request.args.get('session')
-    if not bank.validate_session(session_id):
+    if not session_id or not bank.validate_session(session_id):
         return jsonify({'success': False, 'message': 'Invalid session'})
     
     try:
@@ -447,7 +450,7 @@ def api_balance():
 @app.route('/api/transactions')
 def api_transactions():
     session_id = request.args.get('session')
-    if not bank.validate_session(session_id):
+    if not session_id or not bank.validate_session(session_id):
         return jsonify({'success': False, 'message': 'Invalid session'})
     
     try:
@@ -463,7 +466,7 @@ def api_transactions():
 @app.route('/api/performance')
 def api_performance():
     session_id = request.args.get('session')
-    if not bank.validate_session(session_id):
+    if not session_id or not bank.validate_session(session_id):
         return jsonify({'success': False, 'message': 'Invalid session'})
     
     try:
@@ -480,10 +483,13 @@ def api_performance():
 
 @app.route('/api/transfer', methods=['POST'])
 def api_transfer():
-    data = request.json
+    data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'message': 'Invalid JSON data'}), 400
+    
     session_id = data.get('session')
     
-    if not bank.validate_session(session_id):
+    if not session_id or not bank.validate_session(session_id):
         return jsonify({'success': False, 'message': 'Invalid session'})
     
     try:
